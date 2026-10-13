@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertCircle, ArrowUpRight, Check, Clock3, Search, X } from 'lucide-react';
+import { AlertCircle, Check, Clock3, Search } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
 type AlertItem = {
@@ -16,6 +16,8 @@ type Props = {
   alerts: AlertItem[];
   search: string;
   onSearchChange: (value: string) => void;
+  onChanged: () => Promise<void>;
+  canWrite: boolean;
 };
 
 const statusLabels: Record<string, string> = {
@@ -24,19 +26,13 @@ const statusLabels: Record<string, string> = {
   resolue: 'Résolue',
 };
 
-const severityLabels: Record<string, string> = {
-  critique: 'Critique',
-  attention: 'Attention',
-  information: 'Information',
-};
-
 function formatDate(value: string) {
   return new Intl.DateTimeFormat('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(value));
 }
 
-export default function AnomaliesWorkspace({ alerts, search, onSearchChange }: Props) {
+export default function AnomaliesWorkspace({ alerts, search, onSearchChange, onChanged, canWrite }: Props) {
   const [severityFilter, setSeverityFilter] = useState('Toutes les gravités');
-  const [statusFilter, setStatusFilter] = useState('ouvertes');
+  const [statusFilter, setStatusFilter] = useState('ouverte');
   const [updating, setUpdating] = useState<string | null>(null);
   const [error, setError] = useState('');
 
@@ -59,8 +55,9 @@ export default function AnomaliesWorkspace({ alerts, search, onSearchChange }: P
     const { error: updateError } = await supabase
       .from('sirex_alerts')
       .update({ status: newStatus })
-      .eq('id', alertId);
+      .eq('id', alertId).select('id').single();
     if (updateError) setError(updateError.message);
+    else await onChanged();
     setUpdating(null);
   }
 
@@ -93,7 +90,7 @@ export default function AnomaliesWorkspace({ alerts, search, onSearchChange }: P
               <option value="information">Information</option>
             </select>
             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-              <option value="ouvertes">Ouvertes</option>
+              <option value="ouverte">Ouvertes</option>
               <option value="en_cours">En cours</option>
               <option value="resolue">Résolues</option>
               <option value="Toutes">Toutes</option>
@@ -113,13 +110,13 @@ export default function AnomaliesWorkspace({ alerts, search, onSearchChange }: P
               </div>
               <div className="anomaly-actions">
                 <span className={`status-pill anomaly-status-${alert.status}`}>{statusLabels[alert.status] ?? alert.status}</span>
-                {alert.status === 'ouverte' && (
+                {canWrite && alert.status === 'ouverte' && (
                   <button className="row-action" disabled={updating === alert.id} onClick={() => updateAlertStatus(alert.id, 'en_cours')}>Prendre en charge</button>
                 )}
-                {alert.status === 'en_cours' && (
+                {canWrite && alert.status === 'en_cours' && (
                   <button className="row-action apurement-validate" disabled={updating === alert.id} onClick={() => updateAlertStatus(alert.id, 'resolue')}><Check size={13} /> Résoudre</button>
                 )}
-                {alert.status !== 'resolue' && (
+                {canWrite && alert.status !== 'resolue' && (
                   <button className="row-action apurement-reject" disabled={updating === alert.id} onClick={() => updateAlertStatus(alert.id, 'resolue')}>Clôturer</button>
                 )}
               </div>

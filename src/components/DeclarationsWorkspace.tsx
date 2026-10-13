@@ -1,6 +1,8 @@
 import { FormEvent, useState } from 'react';
 import { AlertCircle, ArrowUpRight, ClipboardCheck, Download, Plus, Search, X } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { money, totalsByCurrency } from '@/lib/domain';
+import DeclarationItemsEditor from '@/components/DeclarationItemsEditor';
 
 type Operator = { id: string; company_name: string };
 type Act = { id: string; reference: string; operator_id: string };
@@ -45,6 +47,8 @@ type Props = {
   acts: Act[];
   search: string;
   onSearchChange: (value: string) => void;
+  onChanged: () => Promise<void>;
+  canWrite: boolean;
 };
 
 const statusLabels: Record<string, string> = {
@@ -60,14 +64,13 @@ function formatDate(value: string) {
 }
 
 function formatMoney(value: number) {
-  return new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 }).format(value);
+  return new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 2 }).format(value);
 }
 
-export default function DeclarationsWorkspace({ declarations, operators, acts, search, onSearchChange }: Props) {
+export default function DeclarationsWorkspace({ declarations, operators, acts, search, onSearchChange, onChanged, canWrite }: Props) {
   const [statusFilter, setStatusFilter] = useState('Tous les statuts');
   const [officeFilter, setOfficeFilter] = useState('Tous les bureaux');
   const [showModal, setShowModal] = useState(false);
-  const [error, setError] = useState('');
   const [selectedDeclaration, setSelectedDeclaration] = useState<Declaration | null>(null);
 
   const offices = Array.from(new Set(declarations.map((d) => d.office))).sort();
@@ -79,10 +82,9 @@ export default function DeclarationsWorkspace({ declarations, operators, acts, s
     return matchesSearch && matchesStatus && matchesOffice;
   });
 
-  const totalDeclared = declarations.reduce((sum, d) => sum + Number(d.declared_value || 0), 0);
+  const totalDeclared = totalsByCurrency(declarations, 'declared_value');
   const pendingCount = declarations.filter((d) => d.status === 'en_attente').length;
   const validatedCount = declarations.filter((d) => d.status === 'validee').length;
-  const regularizeCount = declarations.filter((d) => d.status === 'a_regulariser').length;
 
   return (
     <section className="workspace-page">
@@ -92,7 +94,7 @@ export default function DeclarationsWorkspace({ declarations, operators, acts, s
           <h1>Déclarations</h1>
           <p className="page-subtitle">Suivez les déclarations d'importation et leur rapprochement avec les arrêtés.</p>
         </div>
-        <button className="primary-button" onClick={() => setShowModal(true)} disabled={!operators.length}>
+        <button className="primary-button" onClick={() => setShowModal(true)} disabled={!operators.length || !canWrite}>
           <Plus size={18} /> Nouvelle déclaration
         </button>
       </div>
@@ -100,7 +102,7 @@ export default function DeclarationsWorkspace({ declarations, operators, acts, s
         <div><span>Total déclarations</span><strong>{declarations.length}</strong></div>
         <div><span>En attente</span><strong>{pendingCount}</strong></div>
         <div><span>Validées</span><strong>{validatedCount}</strong></div>
-        <div><span>Valeur déclarée</span><strong>{formatMoney(totalDeclared)}</strong></div>
+        <div><span>Valeur déclarée</span><strong>{totalDeclared}</strong></div>
       </div>
       <div className="panel operator-registry">
         <div className="registry-toolbar">
@@ -143,7 +145,7 @@ export default function DeclarationsWorkspace({ declarations, operators, acts, s
                   <td>{d.operator?.company_name ?? '—'}</td>
                   <td>{d.office}</td>
                   <td>{d.designation || '—'}</td>
-                  <td>{formatMoney(Number(d.declared_value))} FC</td>
+                  <td>{money(Number(d.declared_value), d.currency || 'USD')}</td>
                   <td><span className={`status-pill ${d.status}`}>{statusLabels[d.status] ?? d.status}</span></td>
                   <td><button className="row-action" onClick={(e) => { e.stopPropagation(); setSelectedDeclaration(d); }}>Voir</button></td>
                 </tr>
@@ -160,18 +162,14 @@ export default function DeclarationsWorkspace({ declarations, operators, acts, s
           operators={operators}
           acts={acts}
           onClose={() => setShowModal(false)}
-          onCreated={(declaration) => {
-            setShowModal(false);
-            window.location.reload();
-          }}
+          onCreated={() => { setShowModal(false); void onChanged(); }}
         />
       )}
 
       {selectedDeclaration && (
-        <DeclarationDetail declaration={selectedDeclaration} onClose={() => setSelectedDeclaration(null)} />
+        <DeclarationDetail declaration={selectedDeclaration} onClose={() => setSelectedDeclaration(null)} onChanged={onChanged} canWrite={canWrite} />
       )}
 
-      {error && <div className="data-error"><AlertCircle size={17} />{error}</div>}
     </section>
   );
 }
@@ -328,11 +326,11 @@ function NewDeclarationModal({ operators, acts, onClose, onCreated }: {
               <label>Désignation<input value={designation} onChange={(e) => setDesignation(e.target.value)} placeholder="Description de la marchandise" /></label>
             </div>
             <div className="form-grid">
-              <label>Valeur déclarée<input type="number" min="0" value={declaredValue} onChange={(e) => setDeclaredValue(e.target.value)} placeholder="Montant" required /></label>
+              <label>Valeur déclarée<input type="number" min="0" step="0.01" value={declaredValue} onChange={(e) => setDeclaredValue(e.target.value)} placeholder="Montant" required /></label>
               <label>Devise<select value={currency} onChange={(e) => setCurrency(e.target.value)}><option>USD</option><option>EUR</option><option>CDF</option><option>JPY</option></select></label>
             </div>
             <div className="form-grid">
-              <label>Valeur facture<input type="number" min="0" value={invoiceValue} onChange={(e) => setInvoiceValue(e.target.value)} placeholder="Total facture" /></label>
+              <label>Valeur facture<input type="number" min="0" step="0.01" value={invoiceValue} onChange={(e) => setInvoiceValue(e.target.value)} placeholder="Total facture" /></label>
               <label>Taux de change<input type="number" min="0" step="0.000001" value={exchangeRate} onChange={(e) => setExchangeRate(e.target.value)} placeholder="Ex. 1901" /></label>
             </div>
             <div className="form-grid">
@@ -341,12 +339,12 @@ function NewDeclarationModal({ operators, acts, onClose, onCreated }: {
             </div>
             <div className="form-grid">
               <label>Poids net (kg)<input type="number" min="0" step="0.001" value={netWeight} onChange={(e) => setNetWeight(e.target.value)} placeholder="Ex. 10000" /></label>
-              <label>Base taxable<input type="number" min="0" value={taxBase} onChange={(e) => setTaxBase(e.target.value)} placeholder="Base de calcul" /></label>
+              <label>Base taxable<input type="number" min="0" step="0.01" value={taxBase} onChange={(e) => setTaxBase(e.target.value)} placeholder="Base de calcul" /></label>
             </div>
           </div>
           <div className="form-section">
             <div className="form-section-title"><span>06</span><div><strong>Droits et taxes</strong><small>Montants et ventilation Sydonia</small></div></div>
-            <label>Total droits et taxes<input type="number" min="0" value={totalTaxes} onChange={(e) => setTotalTaxes(e.target.value)} placeholder="Montant total" /></label>
+            <label>Total droits et taxes<input type="number" min="0" step="0.01" value={totalTaxes} onChange={(e) => setTotalTaxes(e.target.value)} placeholder="Montant total" /></label>
             <label>Détail des taxes<textarea value={taxesDetail} onChange={(e) => setTaxesDetail(e.target.value)} placeholder="DD, DCI, TVA, TPI, CPR…" rows={3} /></label>
           </div>
           {error && <div className="form-error"><AlertCircle size={16} />{error}</div>}
@@ -360,7 +358,7 @@ function NewDeclarationModal({ operators, acts, onClose, onCreated }: {
   );
 }
 
-function DeclarationDetail({ declaration, onClose }: { declaration: Declaration; onClose: () => void }) {
+function DeclarationDetail({ declaration, onClose, onChanged, canWrite }: { declaration: Declaration; onClose: () => void; onChanged: () => Promise<void>; canWrite: boolean }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <aside className="detail-drawer" onClick={(e) => e.stopPropagation()}>
@@ -371,6 +369,7 @@ function DeclarationDetail({ declaration, onClose }: { declaration: Declaration;
           </div>
           <button className="icon-button" onClick={onClose}><X size={19} /></button>
         </div>
+        <DeclarationItemsEditor declarationId={declaration.id} currency={declaration.currency || 'USD'} validated={declaration.status === 'validee'} canWrite={canWrite} onChanged={onChanged} />
         <div className="drawer-status">
           <span className={`status-pill ${declaration.status}`}>{statusLabels[declaration.status] ?? declaration.status}</span>
           <span className="province-cell">{declaration.office}</span>
