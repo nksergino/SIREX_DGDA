@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { AlertCircle, ArrowUpRight, Check, FileCheck2, Search, X } from 'lucide-react';
+import { AlertCircle, Check, FileCheck2, Search } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { money } from '@/lib/domain';
 
 type Declaration = {
   id: string;
@@ -11,17 +12,21 @@ type Declaration = {
   designation: string | null;
   declared_value: number;
   status: string;
+  operator_id: string;
+  currency: string | null;
   operator: { company_name: string } | null;
   act: { reference: string; id: string } | null;
 };
 
-type Act = { id: string; reference: string; operator_id: string; authorized_value: number; consumed_value: number };
+type Act = { id: string; reference: string; operator_id: string; authorized_value: number; consumed_value: number; status: string };
 
 type Props = {
   declarations: Declaration[];
   acts: Act[];
   search: string;
   onSearchChange: (value: string) => void;
+  onChanged: () => Promise<void>;
+  canWrite: boolean;
 };
 
 const statusLabels: Record<string, string> = {
@@ -36,11 +41,7 @@ function formatDate(value: string) {
   return new Intl.DateTimeFormat('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(value));
 }
 
-function formatMoney(value: number) {
-  return new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 }).format(value);
-}
-
-export default function ApurementWorkspace({ declarations, acts, search, onSearchChange }: Props) {
+export default function ApurementWorkspace({ declarations, acts, search, onSearchChange, onChanged, canWrite }: Props) {
   const [statusFilter, setStatusFilter] = useState('Tous les statuts');
   const [updating, setUpdating] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -57,34 +58,23 @@ export default function ApurementWorkspace({ declarations, acts, search, onSearc
   const validatedCount = declarations.filter((d) => d.status === 'validee').length;
   const regularizeCount = declarations.filter((d) => d.status === 'a_regulariser').length;
 
-  async function updateStatus(declarationId: string, newStatus: string) {
-    setUpdating(declarationId);
-    setError('');
-    const { error: updateError } = await supabase
-      .from('sirex_declarations')
-      .update({ status: newStatus })
-      .eq('id', declarationId);
-    if (updateError) {
-      setError(updateError.message);
-    } else {
-      const row = document.querySelector(`[data-declaration-id="${declarationId}"] .status-pill`);
-      if (row) {
-        row.className = `status-pill ${newStatus}`;
-        row.textContent = statusLabels[newStatus] ?? newStatus;
-      }
-    }
+  async function checkDeclaration(id: string) {
+    setUpdating(id); setError('');
+    const {data, error} = await supabase.rpc('sirex_check_declaration', {p_declaration_id:id});
+    setError(error?.message || (data?.length ? data.map((r: {detail:string}) => r.detail).join(' · ') : 'Contrôle terminé : aucun écart détecté.'));
     setUpdating(null);
   }
-
+  async function updateStatus(declarationId: string, newStatus: string) {
+    setUpdating(declarationId); setError('');
+    const { error } = await supabase.from('sirex_declarations').update({ status:newStatus }).eq('id',declarationId).select('id').single();
+    if (error) setError(error.message); else await onChanged();
+    setUpdating(null);
+  }
   async function linkAct(declarationId: string, actId: string) {
     if (!actId) return;
-    setUpdating(declarationId);
-    setError('');
-    const { error: updateError } = await supabase
-      .from('sirex_declarations')
-      .update({ act_id: actId, status: 'rapprochee' })
-      .eq('id', declarationId);
-    if (updateError) setError(updateError.message);
+    setUpdating(declarationId); setError('');
+    const {error} = await supabase.from('sirex_declarations').update({act_id:actId,status:'rapprochee'}).eq('id',declarationId).select('id').single();
+    if (error) setError(error.message); else await onChanged();
     setUpdating(null);
   }
 
@@ -141,27 +131,27 @@ export default function ApurementWorkspace({ declarations, acts, search, onSearc
                     {d.act ? (
                       <strong className="act-ref-cell">{d.act.reference}</strong>
                     ) : (
-                      <select className="link-act-select" defaultValue="" onChange={(e) => linkAct(d.id, e.target.value)}>
+                      <select className="link-act-select" disabled={!canWrite || updating === d.id} defaultValue="" onChange={(e) => linkAct(d.id, e.target.value)}>
                         <option value="">Rattacher…</option>
-                        {acts.map((a) => <option key={a.id} value={a.id}>{a.reference}</option>)}
+                        {acts.filter(a => a.operator_id === d.operator_id && a.status === 'valide').map((a) => <option key={a.id} value={a.id}>{a.reference}</option>)}
                       </select>
                     )}
                   </td>
-                  <td>{formatMoney(Number(d.declared_value))} FC</td>
+                  <td>{money(Number(d.declared_value), d.currency || 'USD')}</td>
                   <td><span className={`status-pill ${d.status}`}>{statusLabels[d.status] ?? d.status}</span></td>
                   <td>
-                    <div className="apurement-actions">
-                      {d.status !== 'validee' && d.act && (
+                    <div className="apurement-actions"><button className="row-action" disabled={updating === d.id} onClick={() => void checkDeclaration(d.id)}>Contrôler</button>{canWrite && d.status === 'validee' && <button className="row-action" disabled={updating === d.id} onClick={() => void updateStatus(d.id, 'en_attente')}>Annuler la validation</button>}
+                      {canWrite && d.status !== 'validee' && d.act && (
                         <button className="row-action apurement-validate" disabled={updating === d.id} onClick={() => updateStatus(d.id, 'validee')}>
                           <Check size={13} /> Valider
                         </button>
                       )}
-                      {d.status === 'rapprochee' && (
+                      {canWrite && d.status === 'rapprochee' && (
                         <button className="row-action apurement-reject" disabled={updating === d.id} onClick={() => updateStatus(d.id, 'a_regulariser')}>
                           Régulariser
                         </button>
                       )}
-                      {d.status === 'en_attente' && d.act && (
+                      {canWrite && d.status === 'en_attente' && d.act && (
                         <button className="row-action apurement-reject" disabled={updating === d.id} onClick={() => updateStatus(d.id, 'rejetee')}>
                           Rejeter
                         </button>
