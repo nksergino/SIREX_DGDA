@@ -1,5 +1,5 @@
 import { FormEvent, useState } from 'react';
-import { AlertCircle, ArrowUpRight, ClipboardCheck, Plus, Search, X } from 'lucide-react';
+import { AlertCircle, ArrowUpRight, ClipboardCheck, Download, Plus, Search, X } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
 type Operator = { id: string; company_name: string };
@@ -417,7 +417,10 @@ function DeclarationDetail({ declaration, onClose }: { declaration: Declaration;
             <div><span>Référence destination</span><strong>{declaration.destination_reference || 'Non renseignée'}</strong></div>
           </div>
         </div>
-        <button className="primary-button full" onClick={onClose}>Fermer</button>
+        <div className="drawer-actions print-hide">
+          <button className="secondary-button" type="button" onClick={() => window.print()}><Download size={16} /> Télécharger le PDF</button>
+          <button className="primary-button" onClick={onClose}>Fermer</button>
+        </div>
       </aside>
     </div>
   );
