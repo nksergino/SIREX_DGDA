@@ -17,13 +17,17 @@ const act={id:'a1',reference:'ACT1',operator_id:'o1',act_type:'exoneration',star
 const declaration={id:'d1',operator_id:'o1',declaration_number:'DEC1',office:'101B',declared_date:'2026-10-13',status:'en_attente',declared_value:200,currency:'USD',act:{id:'a1',reference:'ACT1'},operator:{company_name:'Entreprise test'}};
 const alert={id:'n1',title:'Alerte test',detail:'Écart test',severity:'attention',province:'Kinshasa',status:'ouverte',created_at:'2026-10-13T10:00:00Z'};
 const tables={sirex_members:[member],sirex_operators:[operator],sirex_acts:[act],sirex_declarations:[declaration],sirex_alerts:[alert],sirex_audit_logs:[{id:'log1',action:'INSERT',entity_type:'sirex_operators',entity_id:'o1',actor_id:'u1',created_at:'2026-10-13T10:00:00Z',details:{province:'Kinshasa'}}],sirex_declaration_items:[{declaration_id:'d1',description:'Pompe',hs_code:'8413',quantity:2,unit:'PCS',cif_value:200,currency:'USD'}]};
+const rpcCalls=[];
 const backend={auth:{onAuthStateChange(callback){queueMicrotask(()=>callback('INITIAL_SESSION',{user:{id:'u1'}}));return {data:{listener:null,subscription:{unsubscribe(){}}}};},async signOut(){return {error:null};}},from(table){
  let single=false,patch=null,filter=null;
  const query={select(){return query;},order(){return query;},range(){return query;},limit(){return query;},eq(key,value){filter=[key,value];return query;},update(value){patch=value;return query;},upsert(value){patch=value;return query;},maybeSingle(){single=true;return query;},single(){single=true;return query;},then(resolve,reject){
   const rows=(tables[table]||[]).filter(row=>!filter||row[filter[0]]===filter[1]);if(patch) rows.forEach(row=>Object.assign(row,patch));
   return Promise.resolve({data:single?(rows[0]||null):rows.map(row=>({...row})),error:null}).then(resolve,reject);
  }};return query;
-},async rpc(){return {data:[],error:null};}};
+},async rpc(name,args){rpcCalls.push({name,args});
+ if(name==='sirex_import_declarations')return {data:{declarations:args.p_declarations.length,articles:args.p_declarations.reduce((n,d)=>n+d.items.length,0)},error:null};
+ if(name==='sirex_act_balances')return {data:[{item_id:'i1',description:'Pompe à eau',hs_code:'8413',unit:'PCS',currency:'USD',authorized_quantity:10,imported_quantity:2,remaining_quantity:8,authorized_value:1000,imported_value:200,remaining_value:800,ambiguous:false}],error:null};
+ return {data:[],error:null};}};
 const nativeRequire=createRequire(import.meta.url),cache=new Map();
 function component(relative){
  const filename=path.resolve(relative);if(cache.has(filename))return cache.get(filename).exports;
@@ -61,4 +65,34 @@ test('consultation mode has no anomaly write actions',async()=>{
  await React.act(async()=>root.render(React.createElement(Component,{alerts:[{...alert,status:'ouverte'}],search:'',onSearchChange(){},async onChanged(){},canWrite:false})));
  assert.match(document.body.textContent,/Alerte test/);assert.equal([...document.querySelectorAll('button')].some(b=>b.textContent.includes('Clôturer')),false);
  await React.act(async()=>root.unmount());
+});
+
+test('import requires a verified preview and confirmation before sending a pending batch',async()=>{
+ const Modal=component('src/components/DeclarationImportModal.tsx').default;const domain=component('src/lib/declarationImport.ts');const root=createRoot(document.getElementById('root'));let changed=0;
+ await React.act(async()=>root.render(React.createElement(Modal,{operators:[operator],acts:[act],existing:[],onClose(){},async onChanged(){changed++;}})));
+ assert.equal(button('Enregistrer l’import').disabled,true);
+ const beneficiary=document.querySelector('select');await React.act(async()=>{beneficiary.value='o1';beneficiary.dispatchEvent(new window.Event('change',{bubbles:true}));});
+ const input=document.querySelector('input[type=file]');const bytes=new TextEncoder().encode(domain.importTemplate);
+ Object.defineProperty(input,'files',{value:[{name:'export.csv',size:bytes.length,async arrayBuffer(){return bytes.buffer;}}],configurable:true});
+ await React.act(async()=>{input.dispatchEvent(new window.Event('change',{bubbles:true}));await new Promise(r=>setTimeout(r,20));});
+ assert.match(document.body.textContent,/0 erreurs bloquantes/);assert.match(document.body.textContent,/EXEMPLE-2026-001/);assert.equal(button('Enregistrer l’import').disabled,true);
+ await React.act(async()=>document.querySelector('input[type=checkbox]').click());
+ assert.equal(button('Enregistrer l’import').disabled,false);await click('Enregistrer l’import');
+ assert.match(document.body.textContent,/Import enregistré : 1 déclarations et 2 articles/);assert.equal(changed,1);
+ const call=rpcCalls.find(c=>c.name==='sirex_import_declarations');assert.equal(call.args.p_declarations[0].declared_value,350);assert.equal(call.args.p_declarations[0].items.length,2);assert.equal(call.args.p_declarations[0].status,undefined);
+ await React.act(async()=>root.unmount());
+});
+test('balances display validated quantities, remaining values and export availability',async()=>{
+ const Component=component('src/components/BalancesWorkspace.tsx').default;const root=createRoot(document.getElementById('root'));
+ await React.act(async()=>root.render(React.createElement(Component,{acts:[act]})));assert.equal(button('Exporter les reliquats CSV').disabled,true);
+ await React.act(async()=>{const select=document.querySelector('select');select.value='a1';select.dispatchEvent(new window.Event('change',{bubbles:true}));await new Promise(r=>setTimeout(r,0));});
+ assert.match(document.body.textContent,/Pompe à eau/);assert.match(document.body.textContent,/20%/);assert.equal(button('Exporter les reliquats CSV').disabled,false);
+ await React.act(async()=>root.unmount());
+});
+test('first dossier opens operator creation instead of leaving a disabled action',async()=>{
+ const previous={...tables};tables.sirex_operators=[];tables.sirex_acts=[];tables.sirex_declarations=[];tables.sirex_alerts=[];
+ const App=component('src/App.tsx').default;const root=createRoot(document.getElementById('root'));
+ await React.act(async()=>{root.render(React.createElement(App));await new Promise(r=>setTimeout(r,0));});assert.equal(button('Nouveau dossier').disabled,false);await click('Nouveau dossier');
+ assert.match(document.body.textContent,/Ajouter un opérateur/);assert.ok(button('Enregistrer l’opérateur'));
+ await React.act(async()=>root.unmount());Object.assign(tables,previous);
 });

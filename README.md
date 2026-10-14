@@ -16,7 +16,7 @@ Configurer `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY` dans Bolt ou dans un 
 
 ## Mise en service de cette correction
 
-1. Identifier le projet Supabase **réellement utilisé par SIREX**, sauvegarder son schéma/données et tester sur une copie. Le projet Supabase accessible pendant cette correction n’était pas identifié comme celui de SIREX : aucune base distante n’a été modifiée.
+1. Utiliser uniquement le projet dédié **SIREX_DGDA** (`mwwdomavlkifgcajdzpp`), distinct du projet utilisé pour NK-Market. Sauvegarder le schéma/données avant une évolution et tester sur une copie. Le schéma initial et les habilitations ont été installés dans ce projet le 13 octobre 2026.
 2. Vérifier l’historique des cinq migrations déjà présentes. Appliquer ensuite `supabase/migrations/20261013175235_secure_sirex_and_control_apurement.sql` sur ce projet. Ne pas réexécuter les anciennes migrations si elles ont déjà été appliquées. La nouvelle migration est atomique lorsqu’elle est exécutée par le mécanisme de migration ; dans SQL Editor, entourer le fichier entier de `BEGIN;` et `COMMIT;`.
 3. Créer/inviter le premier administrateur dans Supabase Auth, puis ajouter son UUID vérifié dans `sirex_members` **depuis SQL Editor avec un compte privilégié** :
 
@@ -59,7 +59,29 @@ Le graphique et les indicateurs utilisent les données enregistrées ; les totau
 
 - Connexion réelle, invitations et récupération de mot de passe selon la configuration Supabase du projet.
 - Reconnaissance des tableaux de scans réels, accents et dispositions complexes ; le chargement initial des ressources OCR nécessite une connexion réseau.
-- Aucune connexion Oracle/SYDONIA ni import automatique d’un export SYDONIA n’était présent dans le dépôt. La déclaration et ses articles sont saisis ici ; cette intégration nécessite les formats d’export et accès correspondants.
+- Une connexion directe Oracle/SYDONIA nécessite encore les accès et le format du service. Le module d’import accepte maintenant les exports CSV UTF-8, avec correspondance explicite des colonnes et contrôle avant chargement.
 - Les devises et unités doivent correspondre pour valider. Aucune conversion de change ni conversion d’unité implicite n’est appliquée.
 - Un lien signé de PDF déjà émis peut rester utilisable jusqu’à son expiration (5 minutes) ; la révocation interdit les nouveaux accès/signatures.
 - La validation visuelle dans un navigateur n’a pas pu être exécutée dans l’environnement de correction : l’exécutable Chromium était absent et son téléchargement a échoué. Les tests de composants utilisent un DOM de test, avec API simulée, séparément des tests SQL.
+
+## Import des déclarations et suivi des reliquats
+
+Migration supplémentaire : `20261014043928_add_declaration_import_and_balances.sql`. L’appliquer uniquement après le schéma initial. Pour une installation neuve, `supabase/bootstrap_sirex.sql` contient désormais l’ensemble des migrations ; ne pas réexécuter ce script sur une base déjà installée.
+
+Dans **Déclarations → Importer un fichier CSV**, télécharger le modèle fourni. Il comporte des exemples fictifs à remplacer. Depuis Excel, enregistrer en **CSV UTF-8** ; l’application ne lit pas directement les fichiers `.xlsx`/`.xls`. Un fichier contient les déclarations d’un seul bénéficiaire et une ligne par article, avec au maximum 2 Mo, 2 000 articles et 200 déclarations.
+
+Associer les colonnes de l’export, choisir le format décimal (virgule ou point), le bénéficiaire et éventuellement l’arrêté par défaut. Dates acceptées : `JJ/MM/AAAA` et `AAAA-MM-JJ`. Quantités : trois décimales maximum ; montants : deux. La quantité est celle de l’article, pas le nombre de colis. La valeur CIF est celle de l’article, pas la valeur facture ni le total répété de la déclaration. Les codes SH restent des chaînes de caractères pour conserver les zéros initiaux. Les unités et devises doivent être explicites et conformes aux référentiels actuels.
+
+Les références de déclaration doivent être uniques dans SIREX : utiliser la référence complète de l’export. Les lignes d’une même déclaration doivent avoir les mêmes informations d’en-tête. Un numéro de ligne article permet de distinguer des articles identiques ; sans lui, des lignes identiques sont bloquées pour vérification. Lorsque le total CIF de déclaration est fourni, sa répétition et sa concordance avec les articles sont vérifiées. Aucune déclaration déjà enregistrée n’est remplacée automatiquement.
+
+Vérifier l’aperçu puis confirmer l’import. Le serveur recontrôle le lot, applique les droits par province et enregistre les déclarations au statut **En attente**. Une erreur annule le lot entier. Un nouvel essai du même import après une interruption réutilise un identifiant de réception et évite les doubles créations. Un identifiant réutilisé pour un autre contenu est refusé.
+
+L’historique conserve le nom, l’empreinte SHA-256 fournie pour le fichier, l’auteur et la date de réception. Les déclarations et lignes sont liées au lot et à leur numéro de ligne source. Le fichier original n’est pas conservé dans le stockage PDF : garder l’export source selon les procédures documentaires DGDA. Les compteurs d’historique représentent les données actuellement présentes, et les corrections d’articles restent tracées par l’audit.
+
+Dans **Reliquats**, sélectionner un arrêté pour voir les quantités et valeurs autorisées, importées et restantes par bien. Seules les validations consomment les plafonds ; l’annulation restitue les reliquats. Une désignation/unité ambiguë est signalée et n’affiche pas un faux solde. Les sommes sont séparées par devise, les quantités par unité. Export CSV disponible, avec protection contre les formules injectées dans les champs textuels.
+
+**Nouveau dossier / Nouvel arrêté** ouvre désormais la création du bénéficiaire si aucun opérateur n’existe, puis poursuit vers l’arrêté après enregistrement. Les profils en consultation ne peuvent pas déclencher ces créations.
+
+Le module n’est pas une connexion en temps réel à Oracle/SYDONIA. La recette finale nécessite un export réel anonymisé pour vérifier les correspondances, le format des dates/nombres et le numéro complet de déclaration. Aucun changement n’est effectué dans SYDONIA.
+
+Validation du 14 octobre 2026 : 30 tests locaux (parseur CSV, précision monétaire, droits provinciaux, transactions/idempotence, import de 2 000 articles, reliquats et composants), TypeScript, ESLint et compilation réussis. Le backend des nouveaux modules a été installé dans SIREX_DGDA. Une recette PostgreSQL sur ce projet a vérifié import, reprise sans doublon, validation répétée et restitution des reliquats sous le rôle authenticated ; toutes ses données fictives ont été annulées. Le contrôle de sécurité Supabase signale que la protection des mots de passe compromis est désactivée ; l’activer dans les paramètres Auth avant la mise en production (https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection). La recette du frontend dans Bolt avec un fichier réel anonymisé reste nécessaire.
