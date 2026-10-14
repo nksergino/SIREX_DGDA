@@ -137,3 +137,13 @@ textarea:focus { border-color: #7eafd1; background: white; }
 
 .dossier-modal .items-header,.dossier-modal .item-row { grid-template-columns: 65px 75px minmax(140px,1fr) 100px 120px 32px; }
 @media (max-width:700px) { .dossier-modal .item-row { grid-template-columns:1fr 1fr; } .dossier-modal .items-header { display:none; } }
+
+.workspace-actions { display:flex;gap:10px;flex-wrap:wrap; }
+.import-modal { width:min(1120px,96vw);max-height:92vh;overflow:auto; }
+.import-mapping { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:18px 0; }
+.import-errors { max-height:240px;overflow:auto;display:block; }
+.import-confirm { display:flex;align-items:flex-start;gap:10px;margin:20px 0; }
+.import-confirm input { width:auto;flex-shrink:0; }
+.import-success { background:#eaf6ef;color:#205b39;border-radius:8px;padding:16px; }
+.import-history { padding:20px;margin-top:20px; }
+@media(max-width:700px) { .import-mapping { grid-template-columns:1fr; } .workspace-actions { width:100%; } }

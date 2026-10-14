@@ -3,8 +3,10 @@ import { AlertCircle, ArrowUpRight, ClipboardCheck, Download, Plus, Search, X } 
 import { supabase } from '@/lib/supabase';
 import { money, totalsByCurrency } from '@/lib/domain';
 import DeclarationItemsEditor from '@/components/DeclarationItemsEditor';
+import DeclarationImportModal from '@/components/DeclarationImportModal';
+import ImportHistory from '@/components/ImportHistory';
 
-type Operator = { id: string; company_name: string };
+type Operator = { id: string; company_name: string; registration_number: string };
 type Act = { id: string; reference: string; operator_id: string };
 type Declaration = {
   id: string;
@@ -71,6 +73,8 @@ export default function DeclarationsWorkspace({ declarations, operators, acts, s
   const [statusFilter, setStatusFilter] = useState('Tous les statuts');
   const [officeFilter, setOfficeFilter] = useState('Tous les bureaux');
   const [showModal, setShowModal] = useState(false);
+  const [showImport,setShowImport]=useState(false);
+  const [importRevision,setImportRevision]=useState(0);
   const [selectedDeclaration, setSelectedDeclaration] = useState<Declaration | null>(null);
 
   const offices = Array.from(new Set(declarations.map((d) => d.office))).sort();
@@ -94,9 +98,10 @@ export default function DeclarationsWorkspace({ declarations, operators, acts, s
           <h1>Déclarations</h1>
           <p className="page-subtitle">Suivez les déclarations d'importation et leur rapprochement avec les arrêtés.</p>
         </div>
+        <div className="workspace-actions"><button className="secondary-button" disabled={!operators.length || !canWrite} onClick={()=>setShowImport(true)}>Importer un fichier CSV</button>
         <button className="primary-button" onClick={() => setShowModal(true)} disabled={!operators.length || !canWrite}>
           <Plus size={18} /> Nouvelle déclaration
-        </button>
+        </button></div>
       </div>
       <div className="operator-summary">
         <div><span>Total déclarations</span><strong>{declarations.length}</strong></div>
@@ -157,6 +162,8 @@ export default function DeclarationsWorkspace({ declarations, operators, acts, s
         </div>
       </div>
 
+      <ImportHistory refresh={importRevision}/>
+      {showImport&&<DeclarationImportModal operators={operators} acts={acts} existing={declarations.map(d=>d.declaration_number)} onClose={()=>setShowImport(false)} onChanged={async()=>{setImportRevision(r=>r+1);await onChanged();}}/>}
       {showModal && (
         <NewDeclarationModal
           operators={operators}

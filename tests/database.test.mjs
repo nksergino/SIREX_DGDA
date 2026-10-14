@@ -139,3 +139,44 @@ test('migration preserves legacy dossiers and sends unchecked validations for re
  assert.equal((await db.query("SELECT status FROM public.sirex_declarations WHERE declaration_number='LEGACY'")).rows[0].status,'a_regulariser');
  assert.ok((await db.query("SELECT * FROM public.sirex_audit_logs WHERE action='REASSESS_LEGACY_VALIDATION'")).rows.length);
 });
+
+const importHash='a'.repeat(64);
+function importPayload(number, actId=act.id, operatorId=op) {
+ return [{operator_id:operatorId,act_id:actId,declaration_number:number,office:'101B',declared_date:'2026-10-14',declared_value:300,currency:'USD',items:[{description:'Pompe à eau',hs_code:'8413',quantity:2,unit:'PCS',cif_value:200,currency:'USD',source_line:2},{description:'Pompe à eau',hs_code:'8413',quantity:1,unit:'PCS',cif_value:100,currency:'USD',source_line:3}]}];
+}
+async function importBatch(payload,id=crypto.randomUUID()) {return (await db.query('SELECT public.sirex_import_declarations($1,$2,$3,$4::jsonb) result',[id,'export-test.csv',importHash,JSON.stringify(payload)])).rows[0].result;}
+test('controlled import is pending, retry-safe and reflected in validated article balances',async()=>{
+ await as(agent);const a=await actFor(op,'Kinshasa','IMPORT-ACT');const payload=importPayload('IMPORT-001',a.id);const batch=crypto.randomUUID();
+ const imported=await importBatch(payload,batch);assert.equal(imported.declarations,1);assert.equal(imported.articles,2);assert.equal(imported.already_imported,false);
+ const retry=await importBatch(payload,batch);assert.equal(retry.already_imported,true);assert.equal(retry.declarations,1);
+ const d=(await db.query('SELECT id,status FROM public.sirex_declarations WHERE source_import_id=$1',[batch])).rows[0];assert.equal(d.status,'en_attente');
+ let balance=(await db.query('SELECT * FROM public.sirex_act_balances($1)',[a.id])).rows[0];assert.equal(Number(balance.imported_quantity),0);
+ await validate(d.id);balance=(await db.query('SELECT * FROM public.sirex_act_balances($1)',[a.id])).rows[0];assert.equal(Number(balance.imported_quantity),3);assert.equal(Number(balance.remaining_quantity),7);assert.equal(Number(balance.remaining_value),700);
+ await validate(d.id);assert.equal(Number((await db.query('SELECT * FROM public.sirex_act_balances($1)',[a.id])).rows[0].imported_quantity),3);
+ await db.query("UPDATE public.sirex_declarations SET status='en_attente' WHERE id=$1",[d.id]);assert.equal(Number((await db.query('SELECT * FROM public.sirex_act_balances($1)',[a.id])).rows[0].remaining_quantity),10);
+ const history=(await db.query('SELECT * FROM public.sirex_import_history()')).rows;assert.ok(history.some(b=>b.id===batch&&Number(b.articles)===2));
+ payload[0].office='102B';await assert.rejects(importBatch(payload,batch));
+ await assert.rejects(db.query('UPDATE public.sirex_declarations SET source_import_id=null WHERE id=$1',[d.id]));
+});
+test('bad rows, duplicate declarations and non-finite numbers roll back the whole batch',async()=>{
+ await as(agent);const bad=importPayload('IMPORT-ROLLBACK-1');bad.push({...bad[0],declaration_number:'IMPORT-ROLLBACK-2',items:[{...bad[0].items[0],quantity:-1}]});
+ const batch=crypto.randomUUID();await assert.rejects(importBatch(bad,batch));assert.equal((await db.query('SELECT * FROM public.sirex_import_batches WHERE id=$1',[batch])).rows.length,0);assert.equal((await db.query("SELECT * FROM public.sirex_declarations WHERE declaration_number LIKE 'IMPORT-ROLLBACK-%'")).rows.length,0);
+ for(const mutate of [p=>{p[0].declared_value='NaN';},p=>{p[0].items[0].quantity='NaN';},p=>{p[0].items[0].cif_value='Infinity';},p=>{p[0].items[0].cif_value=0.001;},p=>{p[0].status='validee';},p=>{p[0].declared_value=301;}]) {const p=importPayload('BAD-IMPORT-'+crypto.randomUUID());mutate(p);await assert.rejects(importBatch(p));}
+ const duplicate=importPayload('IMPORT-001');await assert.rejects(importBatch(duplicate));
+});
+test('import and history respect provincial scope and read-only rights',async()=>{
+ await as(reader);await assert.rejects(importBatch(importPayload('READER-IMPORT')));assert.ok((await db.query('SELECT * FROM public.sirex_import_history()')).rows.length);
+ await assert.rejects(db.query('SELECT * FROM public.sirex_act_balances($1)',[foreign.id]));
+ await as(agent);await assert.rejects(importBatch(importPayload('FOREIGN-IMPORT',foreign.id,op2)));
+ await as(stranger);assert.equal((await db.query('SELECT * FROM public.sirex_import_history()')).rows.length,0);await assert.rejects(importBatch(importPayload('UNAUTHORIZED-IMPORT')));
+ await as(admin);
+});
+test('ambiguous authorized rows produce unknown balances instead of double-counted consumption',async()=>{
+ await as(agent);const a=await actFor(op,'Kinshasa','AMBIG-BALANCE');await db.query("INSERT INTO public.sirex_act_items(act_id,quantity,unit,description,cif_value,currency) VALUES($1,1,'PCS','Pompe à eau',100,'USD')",[a.id]);
+ const rows=(await db.query('SELECT * FROM public.sirex_act_balances($1)',[a.id])).rows;assert.equal(rows.length,2);assert.ok(rows.every(r=>r.ambiguous&&r.imported_quantity===null&&r.remaining_value===null));
+});
+test('bulk import supports 2000 articles with statement-level anomaly reconciliation',async()=>{
+ await as(agent);const payload=importPayload('IMPORT-BULK');payload[0].declared_value=20;payload[0].items=Array.from({length:2000},(_,i)=>({description:'Pompe à eau',hs_code:'8413',quantity:0.001,unit:'PCS',cif_value:0.01,currency:'USD',source_line:i+2}));
+ const batch=crypto.randomUUID();const result=await importBatch(payload,batch);assert.equal(result.articles,2000);
+ const open=(await db.query("SELECT a.code FROM public.sirex_alerts a JOIN public.sirex_declarations d ON d.id=a.declaration_id WHERE d.source_import_id=$1 AND a.status='ouverte'",[batch])).rows;assert.deepEqual(open,[]);
+});
