@@ -78,7 +78,7 @@ CREATE POLICY sirex_sydonia_rows_read ON public.sirex_sydonia_rows FOR SELECT TO
  USING(EXISTS(SELECT 1 FROM public.sirex_monthly_apurements b WHERE b.id=apurement_id AND sirex_private.can_access(b.province,false)));
 
 CREATE OR REPLACE FUNCTION public.sirex_import_sydonia_month(p_batch_id uuid,p_period date,p_source_name text,p_source_sha256 text,p_rows jsonb)
-RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path='' AS $$
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path='' AS $
 DECLARE office record; batch public.sirex_monthly_apurements; item jsonb; payload text; first_province text; row_count integer:=0; current_operator uuid; current_act uuid; current_item uuid; current_status text; current_detail text;
 BEGIN
  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentification requise.'; END IF;
