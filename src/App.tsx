@@ -39,6 +39,7 @@ type Act = { id: string; reference: string; act_type: string; province: string; 
 type ActWithOperator = Act & { operator: { company_name: string; id: string } | null };
 type Declaration = { id: string; operator_id: string; declaration_number: string; office: string; declared_date: string; hs_code: string | null; designation: string | null; declared_value: number; status: string; exporter_name: string | null; exporter_address: string | null; declarant_name: string | null; customs_regime: string | null; destination_reference: string | null; financial_responsible: string | null; financial_responsible_address: string | null; shipment_country: string | null; origin_country: string | null; destination_country: string | null; preference_code: string | null; currency: string | null; invoice_value: number | null; exchange_rate: number | null; tax_base: number | null; total_taxes: number | null; taxes_detail: string | null; package_count: number | null; gross_weight: number | null; net_weight: number | null; transport_mode: string | null; vehicle_reference: string | null; operator: { company_name: string } | null; act: { reference: string; id: string } | null };
 type AlertItem = { id: string; severity: 'critique' | 'attention' | 'information'; title: string; detail: string; province: string | null; created_at: string; status: string };
+type SydoniaKpis = { rows: number; anomalies: number; recovery_potential: number };
 
 type NavItem = { label: string; icon: typeof LayoutDashboard; badge?: string };
 
@@ -258,6 +259,7 @@ function App() {
   const [acts, setActs] = useState<Act[]>([]);
   const [declarations, setDeclarations] = useState<Declaration[]>([]);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
+  const [sydoniaKpis, setSydoniaKpis] = useState<SydoniaKpis | null>(null);
   const [search, setSearch] = useState('');
   const [dataLoading, setDataLoading] = useState(false);
   const [dataError, setDataError] = useState('');
@@ -268,7 +270,7 @@ function App() {
       const nextUser = nextSession?.user.id || null;
       if (currentUser.current !== nextUser) {
         generation.current += 1; currentUser.current=nextUser;
-        setMember(null); setOperators([]); setActs([]); setDeclarations([]); setAlerts([]);
+        setMember(null); setOperators([]); setActs([]); setDeclarations([]); setAlerts([]); setSydoniaKpis(null);
         setSelectedAct(null); setSelectedOperator(null); setShowModal(false); setShowActModal(false);setCreateActAfterOperator(false);
         setLastSync(null); setDataError('');
       }
@@ -296,17 +298,20 @@ function App() {
           if ((data || []).length < 500) return rows;
         }
       }
-      const [ops, actsData, decs, alertsData] = await Promise.all([
+      const [ops, actsData, decs, alertsData, sydonia] = await Promise.all([
         all('sirex_operators','id,company_name,registration_number,province,sector,status,tax_id,created_at','created_at'),
         all('sirex_acts','*,operator:sirex_operators(company_name,id)','end_date'),
         all('sirex_declarations','*,operator:sirex_operators(company_name),act:sirex_acts(reference,id)','declared_date'),
         all('sirex_alerts','id,severity,title,detail,province,created_at,status','created_at'),
+        supabase.rpc('sirex_apurement_analytics_by_nif',{p_from:null,p_to:null,p_granularity:'month',p_nif:null}),
       ]);
       if (token !== generation.current) return;
       setOperators(ops as Operator[]);
       setActs(actsData.map(item=>({...item,operator:relationOne(item.operator)})) as Act[]);
       setDeclarations(decs.map(item=>({...item,operator:relationOne(item.operator),act:relationOne(item.act)})) as Declaration[]);
-      setAlerts(alertsData as AlertItem[]); setLastSync(new Date().toLocaleString('fr-FR'));
+      setAlerts(alertsData as AlertItem[]);
+      if (!sydonia.error) setSydoniaKpis((sydonia.data as { kpis?: SydoniaKpis } | null)?.kpis ?? null);
+      setLastSync(new Date().toLocaleString('fr-FR'));
     } catch (error) {
       if (token === generation.current) {setDataError(error instanceof Error ? error.message : 'Chargement impossible. Vérifiez la configuration et les migrations SIREX.');setMember(null);setOperators([]);setActs([]);setDeclarations([]);setAlerts([]);}
     } finally {if (token === generation.current) setDataLoading(false);}
@@ -335,9 +340,9 @@ function App() {
     <main className="main-content">
       <header className="topbar"><button className="mobile-menu icon-button" onClick={() => setMobileNav(true)}><Menu size={21} /></button><div className="breadcrumbs"><span>SIREX</span><span>/</span><strong>{activeNav}</strong></div><div className="topbar-actions"><div className="global-search"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Rechercher dans SIREX" /><kbd>⌘ K</kbd></div><button className="icon-button notification"><Bell size={19} /><i /></button><div className="user-menu"><div className="user-avatar">AD</div><div className="user-info"><strong>{member.full_name}</strong><span>{roleLabels[member.role]}</span></div><ChevronDown size={16} /></div></div></header>
       {activeNav === 'Vue d’ensemble' ? <>
-        <section className="page-header"><div><p className="eyebrow">{new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</p><h1>Bonjour, {member.full_name}.</h1><p className="page-subtitle">Voici l’état de vos régimes préférentiels pour l’ensemble du territoire.</p></div><button className="primary-button" disabled={!canWrite} onClick={startDossier}><Plus size={18} /> Nouveau dossier</button></section>
+        <section className="page-header"><div><p className="eyebrow">{new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</p><h1>Bonjour, {member.full_name}.</h1><p className="page-subtitle">Voici l’état de vos régimes préférentiels pour l’ensemble du territoire.</p></div><div className="header-actions"><button className="secondary-button" onClick={() => setActiveNav('Apurement')}>Voir les analyses SYDONIA</button><button className="primary-button" disabled={!canWrite} onClick={startDossier}><Plus size={18} /> Nouveau dossier</button></div></section>
         {dataError && <div className="data-error"><AlertCircle size={17} />{dataError}<button onClick={loadData}>Réessayer</button></div>}
-        <section className="stat-grid"><StatCard label="Opérateurs actifs" value={String(operators.filter((operator) => operator.status === 'actif').length)} detail="référencés dans SIREX" icon={Building2} tone="blue" /><StatCard label="Arrêtés valides" value={String(validActs)} detail="sur le territoire" icon={FileText} tone="teal" /><StatCard label="À échéance < 90 jours" value={String(expiringActs)} detail="nécessitent votre attention" icon={Clock3} tone="amber" /><StatCard label="Valeur consommée" value={totalConsumed} detail="déclarations validées" icon={ArrowUpRight} tone="green" /></section>
+        <section className="stat-grid"><StatCard label="Lignes SYDONIA" value={String(sydoniaKpis?.rows ?? 0)} detail="chargées pour les analyses" icon={ClipboardCheck} tone="blue" /><StatCard label="Anomalies SYDONIA" value={String(sydoniaKpis?.anomalies ?? 0)} detail="à rapprocher ou contrôler" icon={AlertCircle} tone="amber" /><StatCard label="Opérateurs actifs" value={String(operators.filter((operator) => operator.status === 'actif').length)} detail="référencés dans SIREX" icon={Building2} tone="blue" /><StatCard label="Arrêtés valides" value={String(validActs)} detail="sur le territoire" icon={FileText} tone="teal" /><StatCard label="Valeur consommée" value={totalConsumed} detail="déclarations validées" icon={ArrowUpRight} tone="green" /></section>
         <section className="content-grid"><UsageChart acts={acts} declarations={declarations} /><div className="panel alerts-panel"><div className="panel-head"><div><p className="eyebrow">À traiter</p><h2>Alertes récentes</h2></div><button className="text-button" onClick={() => setActiveNav('Anomalies')}>Tout voir <ArrowUpRight size={15} /></button></div><div className="alert-list">{alerts.length ? alerts.filter(a=>a.status !== 'resolue').slice(0,5).map((alert) => <div className="alert-row" key={alert.id}><div className={`alert-symbol ${alert.severity}`}><AlertCircle size={16} /></div><div className="alert-copy"><strong>{alert.title}</strong><span>{alert.detail}</span><small>{formatDate(alert.created_at)}</small></div><MoreHorizontal size={17} className="row-more" /></div>) : <div className="empty-state"><Check size={18} /><span>Aucune alerte ouverte</span></div>}</div></div></section>
         <section className="lower-grid"><div className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">Derniers mouvements</p><h2>Déclarations récentes</h2></div><button className="text-button" onClick={() => setActiveNav('Déclarations')}>Voir le registre <ArrowUpRight size={15} /></button></div><div className="table-wrap"><table><thead><tr><th>Déclaration</th><th>Opérateur</th><th>Bureau</th><th>Montant déclaré</th><th>Statut</th></tr></thead><tbody>{declarations.length ? declarations.map((declaration) => <tr key={declaration.id}><td><strong>{declaration.declaration_number}</strong><span>{formatDate(declaration.declared_date)}</span></td><td>{declaration.operator?.company_name ?? '—'}</td><td>{declaration.office}</td><td>{money(Number(declaration.declared_value),declaration.currency || 'USD')}</td><td><span className={`status-pill ${declaration.status}`}>{statusLabels[declaration.status] ?? declaration.status}</span></td></tr>) : <tr><td colSpan={5}><div className="empty-state">Aucune déclaration enregistrée</div></td></tr>}</tbody></table></div></div><div className="panel operators-panel"><div className="panel-head"><div><p className="eyebrow">Référentiel</p><h2>Opérateurs suivis</h2></div><button className="icon-button" onClick={() => setShowModal(true)}><Plus size={18} /></button></div><div className="operator-list">{filteredOperators.slice(0, 5).map((operator) => <div className="operator-row" key={operator.id}><div className="operator-logo">{operator.company_name.slice(0, 2).toUpperCase()}</div><div className="operator-copy"><strong>{operator.company_name}</strong><span>{operator.province} · {operator.registration_number}</span></div><span className={`status-dot ${operator.status}`} /> </div>)}{!filteredOperators.length && <div className="empty-state">Aucun opérateur correspondant</div>}</div></div></section>
       </> : activeNav === 'Opérateurs' ? <OperatorsWorkspace operators={operators} search={search} onSearchChange={setSearch} onCreate={() => { if (canWrite) setShowModal(true); }} onSelect={setSelectedOperator} canWrite={canWrite} /> : activeNav === 'Arrêtés & décisions' ? <ActsWorkspace acts={acts as ActWithOperator[]} operators={operators} search={search} onSearchChange={setSearch} onCreate={startDossier} onSelect={setSelectedAct} canWrite={canWrite} /> : activeNav === 'Déclarations' ? <DeclarationsWorkspace declarations={declarations as unknown as Declaration[]} operators={operators} acts={acts as Act[]} search={search} onSearchChange={setSearch} onChanged={loadData} canWrite={canWrite} /> : activeNav === 'Apurement' ? <ApurementWorkspace declarations={declarations as unknown as Declaration[]} acts={acts as Act[]} search={search} onSearchChange={setSearch} onChanged={loadData} canWrite={canWrite} /> : activeNav === 'Reliquats' ? <BalancesWorkspace acts={acts} /> : activeNav === 'Anomalies' ? <AnomaliesWorkspace alerts={alerts} search={search} onSearchChange={setSearch} onChanged={loadData} canWrite={canWrite} /> : <AdminWorkspace section={activeNav} member={member} />}
