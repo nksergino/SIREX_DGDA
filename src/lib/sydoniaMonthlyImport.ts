@@ -31,7 +31,7 @@ function date(v:unknown):string|null {
   if(v instanceof Date && !Number.isNaN(v.getTime())) return v.toISOString().slice(0,10);
   const value=text(v);
   const m=value.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
-  const iso=m?\`\${m[3]}-\${m[2].padStart(2,'0')}-\${m[1].padStart(2,'0')}\`:value;
+  const iso=m?`${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`:value;
   const parsed=new Date(iso+'T00:00:00Z');
   return /^\d{4}-\d{2}-\d{2}$/.test(iso)&&!Number.isNaN(parsed.getTime())&&parsed.toISOString().slice(0,10)===iso?iso:null;
 }
@@ -57,7 +57,7 @@ export async function parseSydoniaWorkbook(file:File):Promise<{hash:string;previ
     const declaration_date=date(get('declaration_date')); const declaration_year=number(get('declaration_year')); const net_weight=number(get('net_weight'));
     const missingValue=[['REPERTOIRE_DEC',get('declaration_number')],['NIF_IMPORTATEUR',get('nif')],['CODD_ADD',get('act_reference')],['POS_TARIF',get('hs_code')],['DESIGNATION_MSE',get('description')]].find(([,v])=>!v);
     if(missingValue||!declaration_date||!declaration_year||net_weight===null||net_weight<0) {
-      issues.push({line,message:missingValue?\`\${missingValue[0]} est absent.\`:'Date, année ou P_NET invalide.'}); return;
+      issues.push({line,message:missingValue?`${missingValue[0]} est absent.`:'Date, année ou P_NET invalide.'}); return;
     }
     rows.push({source_line:line,declaration_number:get('declaration_number'),declaration_date,declaration_year:Math.trunc(declaration_year),office_code:get('office_code'),office_name:get('office_name'),declarant_code:get('declarant_code'),declarant_name:get('declarant_name'),nif:get('nif'),operator_name:get('operator_name'),act_reference:get('act_reference'),article_number:get('article_number'),hs_code:get('hs_code').replace(/[.\s]/g,''),description:get('description'),net_weight,cif_value:number(get('cif_value')),currency:get('currency').toUpperCase()||null,exchange_rate:number(get('exchange_rate')),total_taxes:number(get('total_taxes'))});
   });
