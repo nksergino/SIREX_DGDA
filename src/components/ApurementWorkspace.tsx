@@ -6,7 +6,7 @@ import { money } from '@/lib/domain';
 type Row={ [key:string]: string|number|null|undefined };
 type Kpis={rows:number;declarations:number;operators:number;conformes:number;anomalies:number;taux_conformite:number;amount_to_verify:number;cif_total:number;net_weight_total:number};
 type Analytics={nif:string|null;operator_name:string|null;kpis:Kpis;by_status:Row[];by_period:Row[];by_code_add:Row[];by_bureau:Row[];by_declarant:Row[];by_operator:Row[];goods:Row[];data_quality:{missing_nif:number;missing_code_add:number;duplicate_declaration_articles:number};candidates:Row[]};
-type Props={search:string;onSearchChange:(value:string)=>void};
+type Props={search:string;onSearchChange:(value:string)=>void;declarations?:unknown[];acts?:unknown[];onChanged?:()=>Promise<void>;canWrite?:boolean};
 const labels:Record<string,string>={conforme:'Conforme',operateur_introuvable:'Opérateur/NIF introuvable',arrete_introuvable:'Code ADD non trouvé',arrete_expire:'Arrêté expiré',article_non_autorise:'Article hors arrêté',quantite_depassee:'Quantité dépassée',a_controler:'À contrôler',unite_incompatible:'Unité incompatible'};
 const n=(value:unknown)=>Number(value||0);
 const t=(value:unknown)=>String(value??'—');
