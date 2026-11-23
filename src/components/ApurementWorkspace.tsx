@@ -1,172 +1,20 @@
-import { useState } from 'react';
-import { AlertCircle, Check, FileCheck2, Search } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { AlertCircle, FileCheck2, Search } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { money } from '@/lib/domain';
 
-type Declaration = {
-  id: string;
-  declaration_number: string;
-  office: string;
-  declared_date: string;
-  hs_code: string | null;
-  designation: string | null;
-  declared_value: number;
-  status: string;
-  operator_id: string;
-  currency: string | null;
-  operator: { company_name: string } | null;
-  act: { reference: string; id: string } | null;
-};
+type Declaration={id:string;declaration_number:string;declared_value:number;status:string;currency:string|null;operator:{company_name:string}|null;act:{reference:string;id:string}|null};
+type CodeAdd={act_reference:string;declarations:number;lines:number;conformes:number;anomalies:number;net_weight:number;recovery_potential:number};
+type Good={hs_code:string;description:string;lines:number;net_weight:number;anomalies:number;recovery_potential:number};
+type Analytics={nif:string|null;operator_name:string|null;codes_add:CodeAdd[];goods:Good[];kpis:{rows:number;conformes:number;anomalies:number;taux_conformite:number;operators_unknown:number;acts_unknown:number;acts_expired:number;articles_outside:number;quantities_exceeded:number;recovery_potential:number};by_bureau:{office_code:string;office_name:string;province:string;rows:number;anomalies:number;recovery_potential:number}[];by_operator:{nif:string;operator_name:string;rows:number;anomalies:number;recovery_potential:number}[];by_period:{period:string;rows:number;conformes:number;anomalies:number;recovery_potential:number}[]};
+type Props={declarations:Declaration[];acts:unknown[];search:string;onSearchChange:(value:string)=>void;onChanged:()=>Promise<void>;canWrite:boolean};
+const statusLabels:Record<string,string>={en_attente:'En attente',rapprochee:'Rapprochée',validee:'Validée',a_regulariser:'À régulariser',rejetee:'Rejetée'};
+function labelPeriod(value:string,granularity:string){const date=new Date(value+'T00:00:00Z');return granularity==='week'?'Semaine du '+new Intl.DateTimeFormat('fr-FR',{day:'2-digit',month:'short',year:'numeric'}).format(date):new Intl.DateTimeFormat('fr-FR',{month:'long',year:'numeric'}).format(date);}
 
-type Act = { id: string; reference: string; operator_id: string; authorized_value: number; consumed_value: number; status: string };
-
-type Props = {
-  declarations: Declaration[];
-  acts: Act[];
-  search: string;
-  onSearchChange: (value: string) => void;
-  onChanged: () => Promise<void>;
-  canWrite: boolean;
-};
-
-const statusLabels: Record<string, string> = {
-  en_attente: 'En attente',
-  rapprochee: 'Rapprochée',
-  validee: 'Validée',
-  a_regulariser: 'À régulariser',
-  rejetee: 'Rejetée',
-};
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(value));
-}
-
-export default function ApurementWorkspace({ declarations, acts, search, onSearchChange, onChanged, canWrite }: Props) {
-  const [statusFilter, setStatusFilter] = useState('Tous les statuts');
-  const [updating, setUpdating] = useState<string | null>(null);
-  const [error, setError] = useState('');
-
-  const filtered = declarations.filter((d) => {
-    const q = search.toLowerCase();
-    const matchesSearch = `${d.declaration_number} ${d.operator?.company_name ?? ''} ${d.act?.reference ?? ''}`.toLowerCase().includes(q);
-    const matchesStatus = statusFilter === 'Tous les statuts' || d.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
-
-  const pendingCount = declarations.filter((d) => d.status === 'en_attente').length;
-  const rapprocheeCount = declarations.filter((d) => d.status === 'rapprochee').length;
-  const validatedCount = declarations.filter((d) => d.status === 'validee').length;
-  const regularizeCount = declarations.filter((d) => d.status === 'a_regulariser').length;
-
-  async function checkDeclaration(id: string) {
-    setUpdating(id); setError('');
-    const {data, error} = await supabase.rpc('sirex_check_declaration', {p_declaration_id:id});
-    setError(error?.message || (data?.length ? data.map((r: {detail:string}) => r.detail).join(' · ') : 'Contrôle terminé : aucun écart détecté.'));
-    setUpdating(null);
-  }
-  async function updateStatus(declarationId: string, newStatus: string) {
-    setUpdating(declarationId); setError('');
-    const { error } = await supabase.from('sirex_declarations').update({ status:newStatus }).eq('id',declarationId).select('id').single();
-    if (error) setError(error.message); else await onChanged();
-    setUpdating(null);
-  }
-  async function linkAct(declarationId: string, actId: string) {
-    if (!actId) return;
-    setUpdating(declarationId); setError('');
-    const {error} = await supabase.from('sirex_declarations').update({act_id:actId,status:'rapprochee'}).eq('id',declarationId).select('id').single();
-    if (error) setError(error.message); else await onChanged();
-    setUpdating(null);
-  }
-
-  return (
-    <section className="workspace-page">
-      <div className="workspace-title">
-        <div>
-          <p className="eyebrow">Rapprochement</p>
-          <h1>Apurement</h1>
-          <p className="page-subtitle">Rapprochez les déclarations avec les arrêtés et validez l'apurement.</p>
-        </div>
-      </div>
-      <div className="operator-summary">
-        <div><span>En attente</span><strong>{pendingCount}</strong></div>
-        <div><span>Rapprochées</span><strong>{rapprocheeCount}</strong></div>
-        <div><span>Validées</span><strong>{validatedCount}</strong></div>
-        <div><span>À régulariser</span><strong>{regularizeCount}</strong></div>
-      </div>
-      <div className="panel operator-registry">
-        <div className="registry-toolbar">
-          <div className="registry-search">
-            <Search size={17} />
-            <input value={search} onChange={(e) => onSearchChange(e.target.value)} placeholder="Rechercher par numéro, opérateur ou arrêté" />
-          </div>
-          <div className="registry-filters">
-            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-              <option>Tous les statuts</option>
-              <option value="en_attente">En attente</option>
-              <option value="rapprochee">Rapprochée</option>
-              <option value="validee">Validée</option>
-              <option value="a_regulariser">À régulariser</option>
-              <option value="rejetee">Rejetée</option>
-            </select>
-          </div>
-        </div>
-        <div className="table-wrap">
-          <table className="operator-table apurement-table">
-            <thead>
-              <tr>
-                <th>Déclaration</th>
-                <th>Opérateur</th>
-                <th>Arrêté rattaché</th>
-                <th>Montant</th>
-                <th>Statut</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.length ? filtered.map((d) => (
-                <tr key={d.id} data-declaration-id={d.id}>
-                  <td><strong>{d.declaration_number}</strong><span>{formatDate(d.declared_date)}</span></td>
-                  <td>{d.operator?.company_name ?? '—'}</td>
-                  <td>
-                    {d.act ? (
-                      <strong className="act-ref-cell">{d.act.reference}</strong>
-                    ) : (
-                      <select className="link-act-select" disabled={!canWrite || updating === d.id} defaultValue="" onChange={(e) => linkAct(d.id, e.target.value)}>
-                        <option value="">Rattacher…</option>
-                        {acts.filter(a => a.operator_id === d.operator_id && a.status === 'valide').map((a) => <option key={a.id} value={a.id}>{a.reference}</option>)}
-                      </select>
-                    )}
-                  </td>
-                  <td>{money(Number(d.declared_value), d.currency || 'USD')}</td>
-                  <td><span className={`status-pill ${d.status}`}>{statusLabels[d.status] ?? d.status}</span></td>
-                  <td>
-                    <div className="apurement-actions"><button className="row-action" disabled={updating === d.id} onClick={() => void checkDeclaration(d.id)}>Contrôler</button>{canWrite && d.status === 'validee' && <button className="row-action" disabled={updating === d.id} onClick={() => void updateStatus(d.id, 'en_attente')}>Annuler la validation</button>}
-                      {canWrite && d.status !== 'validee' && d.act && (
-                        <button className="row-action apurement-validate" disabled={updating === d.id} onClick={() => updateStatus(d.id, 'validee')}>
-                          <Check size={13} /> Valider
-                        </button>
-                      )}
-                      {canWrite && d.status === 'rapprochee' && (
-                        <button className="row-action apurement-reject" disabled={updating === d.id} onClick={() => updateStatus(d.id, 'a_regulariser')}>
-                          Régulariser
-                        </button>
-                      )}
-                      {canWrite && d.status === 'en_attente' && d.act && (
-                        <button className="row-action apurement-reject" disabled={updating === d.id} onClick={() => updateStatus(d.id, 'rejetee')}>
-                          Rejeter
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              )) : (
-                <tr><td colSpan={6}><div className="empty-state"><FileCheck2 size={17} /> Aucune déclaration à rapprocher</div></td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      {error && <div className="data-error"><AlertCircle size={17} />{error}</div>}
-    </section>
-  );
+export default function ApurementWorkspace({declarations,search,onSearchChange}:Props) {
+ const [analytics,setAnalytics]=useState<Analytics|null>(null); const [nif,setNif]=useState(''); const [from,setFrom]=useState(''); const [to,setTo]=useState(''); const [granularity,setGranularity]=useState<'month'|'week'>('month'); const [loading,setLoading]=useState(false); const [error,setError]=useState('');
+ async function load(){setLoading(true);setError('');const {data,error}=await supabase.rpc('sirex_apurement_analytics_by_nif',{p_from:from?from+'-01':null,p_to:to?to+'-01':null,p_granularity:granularity,p_nif:nif.trim()||null});if(error)setError(error.message);else setAnalytics(data as Analytics);setLoading(false);}
+ useEffect(()=>{void load();},[]);
+ const rows=declarations.filter(d=>(d.declaration_number+' '+(d.operator?.company_name||'')+' '+(d.act?.reference||'')).toLowerCase().includes(search.toLowerCase())); const k=analytics?.kpis;
+ return <section className="workspace-page"><div className="workspace-title"><div><p className="eyebrow">Apurement mensuel & hebdomadaire</p><h1>Analyse des risques</h1><p className="page-subtitle">Les analyses sont calculées à partir des imports SYDONIA autorisés dans votre ressort.</p></div><button className="secondary-button" disabled={loading} onClick={()=>void load()}>Actualiser</button></div><div className="panel admin-panel"><label>NIF de l’opérateur<input value={nif} onChange={e=>setNif(e.target.value)} placeholder="Laisser vide : toutes les entreprises"/></label><label>Fréquence<select value={granularity} onChange={e=>setGranularity(e.target.value as 'month'|'week')}><option value="month">Mensuelle</option><option value="week">Hebdomadaire</option></select></label><label>Du mois<input type="month" value={from} onChange={e=>setFrom(e.target.value)}/></label><label>Au mois<input type="month" value={to} onChange={e=>setTo(e.target.value)}/></label><button className="primary-button" disabled={loading} onClick={()=>void load()}>Analyser</button></div>{k&&<><div className="panel admin-panel">{analytics.nif&&<strong>Analyse de {analytics.operator_name||"l’opérateur"} · NIF {analytics.nif}</strong>}{!analytics.nif&&<strong>Analyse consolidée de tous les opérateurs accessibles</strong>}</div><div className="operator-summary"><div><span>Lignes contrôlées</span><strong>{k.rows}</strong></div><div><span>Taux conforme</span><strong>{k.taux_conformite}%</strong></div><div><span>Anomalies</span><strong>{k.anomalies}</strong></div><div><span>Recouvrement indicatif</span><strong>{money(Number(k.recovery_potential),'USD')}</strong></div></div><div className="panel table-wrap"><h3>Évolution {granularity==='week'?'hebdomadaire':'mensuelle'}</h3><table><thead><tr><th>Période</th><th>Lignes</th><th>Conformes</th><th>Anomalies</th><th>Potentiel indicatif</th></tr></thead><tbody>{analytics.by_period.length?analytics.by_period.map(r=><tr key={r.period}><td>{labelPeriod(r.period,granularity)}</td><td>{r.rows}</td><td>{r.conformes}</td><td>{r.anomalies}</td><td>{money(Number(r.recovery_potential),'USD')}</td></tr>):<tr><td colSpan={5}>Aucune donnée.</td></tr>}</tbody></table></div><div className="panel table-wrap"><h3>Codes ADD utilisés {granularity==='week'?'sur la période hebdomadaire':'durant le mois'}</h3><table><thead><tr><th>Code ADD</th><th>Déclarations</th><th>Lignes</th><th>Conformes</th><th>Anomalies</th><th>P_NET cumulé</th><th>Potentiel indicatif</th></tr></thead><tbody>{analytics.codes_add.length?analytics.codes_add.map(r=><tr key={r.act_reference}><td>{r.act_reference}</td><td>{r.declarations}</td><td>{r.lines}</td><td>{r.conformes}</td><td>{r.anomalies}</td><td>{r.net_weight}</td><td>{money(Number(r.recovery_potential),'USD')}</td></tr>):<tr><td colSpan={7}>Aucun code ADD utilisé pour cette sélection.</td></tr>}</tbody></table></div><div className="panel table-wrap"><h3>Marchandises déclarées</h3><table><thead><tr><th>Code marchandise</th><th>Désignation</th><th>Lignes</th><th>P_NET cumulé</th><th>Anomalies</th><th>Potentiel indicatif</th></tr></thead><tbody>{analytics.goods.length?analytics.goods.slice(0,50).map(r=><tr key={r.hs_code}><td>{r.hs_code}</td><td>{r.description}</td><td>{r.lines}</td><td>{r.net_weight}</td><td>{r.anomalies}</td><td>{money(Number(r.recovery_potential),'USD')}</td></tr>):<tr><td colSpan={6}>Aucune marchandise pour cette sélection.</td></tr>}</tbody></table></div><div className="panel operator-registry"><h3>Signaux de risque</h3><div className="detail-grid"><div><span>Articles hors liste</span><strong>{k.articles_outside}</strong></div><div><span>Quantités dépassées</span><strong>{k.quantities_exceeded}</strong></div><div><span>Arrêtés expirés</span><strong>{k.acts_expired}</strong></div><div><span>Arrêtés introuvables</span><strong>{k.acts_unknown}</strong></div><div><span>NIF inconnus</span><strong>{k.operators_unknown}</strong></div><div><span>Usage</span><strong>À valider avant tout recouvrement.</strong></div></div></div><div className="panel table-wrap"><h3>Bureaux à prioriser</h3><table><thead><tr><th>Bureau</th><th>Province</th><th>Lignes</th><th>Anomalies</th><th>Potentiel indicatif</th></tr></thead><tbody>{analytics.by_bureau.length?analytics.by_bureau.slice(0,20).map(r=><tr key={r.office_code}><td>{r.office_code} · {r.office_name}</td><td>{r.province}</td><td>{r.rows}</td><td>{r.anomalies}</td><td>{money(Number(r.recovery_potential),'USD')}</td></tr>):<tr><td colSpan={5}>Aucune donnée.</td></tr>}</tbody></table></div><div className="panel table-wrap"><h3>Opérateurs à risque</h3><table><thead><tr><th>NIF</th><th>Opérateur</th><th>Lignes</th><th>Anomalies</th><th>Potentiel indicatif</th></tr></thead><tbody>{analytics.by_operator.length?analytics.by_operator.slice(0,20).map(r=><tr key={r.nif}><td>{r.nif}</td><td>{r.operator_name}</td><td>{r.rows}</td><td>{r.anomalies}</td><td>{money(Number(r.recovery_potential),'USD')}</td></tr>):<tr><td colSpan={5}>Aucune donnée.</td></tr>}</tbody></table></div></>}<div className="panel operator-registry"><div className="registry-toolbar"><div className="registry-search"><Search size={17}/><input value={search} onChange={e=>onSearchChange(e.target.value)} placeholder="Rechercher une déclaration historique"/></div></div><div className="table-wrap"><table><thead><tr><th>Déclaration</th><th>Opérateur</th><th>Arrêté</th><th>Montant</th><th>Statut</th></tr></thead><tbody>{rows.length?rows.map(d=><tr key={d.id}><td>{d.declaration_number}</td><td>{d.operator?.company_name||'—'}</td><td>{d.act?.reference||'—'}</td><td>{money(Number(d.declared_value),d.currency||'USD')}</td><td>{statusLabels[d.status]||d.status}</td></tr>):<tr><td colSpan={5}><div className="empty-state"><FileCheck2 size={17}/>Aucune déclaration.</div></td></tr>}</tbody></table></div></div>{loading&&<p>Calcul des analyses…</p>}{error&&<div className="data-error"><AlertCircle size={17}/>{error}</div>}</section>;
 }
